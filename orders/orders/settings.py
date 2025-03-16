@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 import os
+
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -41,6 +42,11 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
+    'rest_framework',
+    'rest_framework.authtoken',
+    'django_rest_passwordreset',
+    'backend.apps.BackendConfig',
 ]
 
 MIDDLEWARE = [
@@ -79,8 +85,12 @@ WSGI_APPLICATION = 'orders.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'backend',
+        'USER': os.getenv('USER'),
+        'PASSWORD': os.getenv('PASSWORD'),
+        'HOST': os.getenv('HOST', '127.0.0.1'),
+        'PORT': os.getenv('PORT', '5432'),
     }
 }
 
@@ -107,9 +117,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/5.1/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'ru-RU'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Europe/Moscow'
 
 USE_I18N = True
 
@@ -125,3 +135,21 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+AUTH_USER_MODEL = 'backend.User' # для переопределения стандартной пользовательской модели на кастомную
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+#django.core.mail.backends.console.EmailBackend для консольного тестирования без отправки спама
+EMAIL_HOST = 'smtp.mail.ru' # почтовый протокол mail.ru
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER') # почта@mail.ru
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD') # спецпароль для внешних приложений на отправку писем по SMTP
+EMAIL_PORT = '587' # безопасный защищённый порт
+EMAIL_USE_TLS = True # TLS шифрование
+SERVER_EMAIL = EMAIL_HOST_USER
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework.authentication.TokenAuthentication', # аутентификация по токенам вместо стандартной по сессиям
+    ),
+}
