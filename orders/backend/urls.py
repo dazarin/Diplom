@@ -1,5 +1,5 @@
 from django.urls import path
-from django_rest_passwordreset.views import reset_password_request_token
+from django_rest_passwordreset.views import reset_password_request_token, reset_password_confirm
 from .views import RegisterAccount, ConfirmAccount, LoginAccount
 
 
@@ -9,4 +9,5 @@ urlpatterns = [
     path('user/confirm', ConfirmAccount.as_view(), name='user-confirm'),
     path('user/login', LoginAccount.as_view(), name='user-login'),
     path('user/password_reset', reset_password_request_token, name='user-password-reset'),
+    path('user/password_reset/confirm', reset_password_confirm, name='user-password-reset-confirm')
 ]
