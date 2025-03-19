@@ -3,9 +3,17 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django_rest_passwordreset.tokens import get_token_generator
 
 
-USER_TYPE_CHOISES = (
+USER_TYPE_CHOICES = (
     ('seller', 'Продавец'),
     ('byer', 'Покупатель'),
+)
+
+STATUS_CHOICES = (
+    ('basket', 'Корзина'),
+    ('new', 'Новый заказ'),
+    ('delivery', 'Доставка'),
+    ('finish', 'Исполнен'),
+    ('canceled', 'Отменён'),
 )
 
 class UserManager(BaseUserManager):
@@ -48,7 +56,7 @@ class User(AbstractUser):
     objects = UserManager()
     USERNAME_FIELD = 'email' # аутентификация по почте вместо имени пользователя
     email = models.EmailField(max_length=127, unique=True)
-    type = models.CharField(choices=USER_TYPE_CHOISES, max_length=6, default='buyer')
+    type = models.CharField(choices=USER_TYPE_CHOICES, max_length=6, default='buyer')
     is_active = models.BooleanField(default=False)
     # активация юзера через проверку почты, вместо физического удаления юзера из базы он будет деактивирован
     # Остальные непереопределяемые поля (имя, фамилия, никнейм) наследуются от базового класса
@@ -103,6 +111,9 @@ class Contact(models.Model):
     house = models.CharField(max_length=5, verbose_name='Дом')
     flat = models.CharField(max_length=5, verbose_name='Квартира', blank=True, null=True)
     comments = models.CharField(verbose_name='Комментарии', blank=True, null=True)
+
+    def __str__(self):
+        return f'{self.city} {self.street} {self.house} {self.flat}'
 
 
 class Shop(models.Model):
@@ -187,3 +198,26 @@ class ProductParameter(models.Model):
         ]
 
 
+class Order(models.Model):
+    objects = models.manager.Manager()
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders', verbose_name='Покупатель')
+    address = models.ForeignKey(Contact, on_delete=models.CASCADE, related_name='orders', verbose_name='Адрес')
+    dt = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(choices=STATUS_CHOICES, max_length=15, verbose_name='Статус заказа')
+
+    class Meta:
+        ordering = ['-dt']
+
+    def __str__(self):
+        return f'Заказ № {self.pk} от {self.dt}'
+
+
+class OrderItem(models.Model):
+    objects = models.manager.Manager()
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='ordered_items', verbose_name='Заказ')
+    product_info = models.ForeignKey(ProductInfo, on_delete=models.CASCADE, related_name='ordered_items',
+                                     verbose_name='Информация о продукте')
+    quantity = models.PositiveIntegerField(verbose_name='Количество')
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['order_id', 'product_info'], name='unique_order_item')]

@@ -15,7 +15,7 @@ class RegisterAccount(APIView):
     """
 
     def post(self, request):
-        if {'first_name', 'last_name', 'username', 'email', 'password'}.issubset(request.data):
+        if {'first_name', 'last_name', 'username', 'email', 'password', 'phone'}.issubset(request.data):
             try:
                 validate_password(request.data['password']) # проверяем пароль на сложность
             except Exception as err: # формируем ошибки валидации пароля
