@@ -133,7 +133,7 @@ class Shop(models.Model):
 class Category(models.Model):
     objects = models.manager.Manager()
     name = models.CharField(max_length=50, verbose_name='Название категориии')
-    shops = models.ManyToManyField(Shop, related_name='categories', verbose_name='Магазины', blank=True, null=True)
+    shops = models.ManyToManyField(Shop, related_name='categories', verbose_name='Магазины', blank=True)
 
     class Meta:
         ordering = ['name']

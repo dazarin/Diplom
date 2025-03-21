@@ -1,11 +1,15 @@
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
+from django.core.validators import URLValidator
 from django.http import JsonResponse
 from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.authtoken.models import Token
+from requests import get
+from yaml import load, Loader
 
-from .models import ConfirmEmailToken
+from .models import ConfirmEmailToken, Category, Shop, ProductInfo, Product, Parameter, ProductParameter
 from .serializers import UserSerializer
 
 
@@ -72,3 +76,51 @@ class LoginAccount(APIView):
                 return JsonResponse({'Status': False, 'Error': 'Требуется подтверждение электронной почты'})
             return JsonResponse({'Status': False, 'Error': 'Аутентификация неуспешна. Проверьте вводимые данные'})
         return JsonResponse({'Status': False, 'Error': 'Не переданы email и/или пароль'})
+
+
+class PartnerUpdate(APIView):
+    """
+    Класс для актуализации цен, обновления информации о товарах и добавления новых товаров в каталог
+    """
+
+    def post(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            if request.user.type == 'seller':
+                url = request.data.get('url')
+                if url:
+                    validate_url = URLValidator()
+                    try:
+                        validate_url(url)
+                    except ValidationError as err:
+                        return JsonResponse({'Status': False, 'Error': str(err)})
+                    else:
+                        stream = get(url).content
+                        data = load(stream, Loader=Loader)
+                        shop, _ = Shop.objects.get_or_create(name=data['shop'], user_id=request.user.id)
+                        for category in data['categories']:
+                            cat, _ = Category.objects.get_or_create(id=category['id'], name=category['name'])
+                            cat.shops.add(shop.id)
+                            cat.save()
+                        ProductInfo.objects.filter(shop_id=shop.id).delete()
+                        for item in data['goods']:
+                            product, _ = Product.objects.get_or_create(name=item['name'], category_id=item['category'])
+                            product_info = ProductInfo.objects.create(product_id=product.id,
+                                                                      external_id=item['id'],
+                                                                      model=item['model'],
+                                                                      price=item['price'],
+                                                                      price_rrc=item['price_rrc'],
+                                                                      quantity=item['quantity'],
+                                                                      shop_id=shop.id)
+                            for name, value in item['parameters'].items():
+                                param, _ = Parameter.objects.get_or_create(name=name)
+                                ProductParameter.objects.create(product_info_id=product_info.id,
+                                                                parameter_id=param.id,
+                                                                value=value)
+                        return JsonResponse({'Status': 'Каталог обновлён'})
+                return JsonResponse({'Status': False, 'Error': 'Не передана ссылка на файл обновления'},
+                                    status=400)
+            return JsonResponse({'Status': False, 'Error': 'Обновление прайса доступно только для продавцов'},
+                                status=403)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
