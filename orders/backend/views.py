@@ -2,15 +2,18 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
+from django.db.models import Q
 from django.http import JsonResponse
+from rest_framework.response import Response
 from django.shortcuts import render
+from rest_framework.generics import ListAPIView
 from rest_framework.views import APIView
 from rest_framework.authtoken.models import Token
 from requests import get
 from yaml import load, Loader
 
 from .models import ConfirmEmailToken, Category, Shop, ProductInfo, Product, Parameter, ProductParameter
-from .serializers import UserSerializer
+from .serializers import UserSerializer, CategorySerializer, ShopSerializer, ProductInfoSerializer
 
 
 class RegisterAccount(APIView):
@@ -124,3 +127,79 @@ class PartnerUpdate(APIView):
         return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
                             status=401)
 
+
+class CategoryView(ListAPIView):
+    """
+    Класс для просмотра категорий
+    """
+
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+
+
+class ShopView(ListAPIView):
+    """
+    Класс для просмотра магазинов
+    """
+
+    queryset = Shop.objects.filter(opened=True)
+    serializer_class = ShopSerializer
+
+
+class ProductInfoView(APIView):
+    """
+    Класс для поиска товаров по категории и/или магазину. Если пользователем передан конкретный магазин или категория,
+    последовательно сужаем поле поиска, иначе отдаём все товары, доступные к заказу из открытых магазинов.
+    Информацию о товарах отдаём со всеми их характеристиками.
+    """
+
+    def get(self, request):
+        shop_id = request.query_params.get('shop_id')
+        category_id = request.query_params.get('category_id')
+        # Подгатавливам фильтры
+        query = Q(shop__opened=True)
+        if shop_id:
+            query = query & Q(shop_id=shop_id)
+        if category_id:
+            query = query & Q(product__category_id=category_id)
+        # Фильтруем и отбрасываем дубликаты
+        queryset = ProductInfo.objects.filter(query).select_related('shop', 'product__category').prefetch_related(
+            'product_parameters__parameter').distinct()
+        serializer = ProductInfoSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+
+class OpenCloseShop(APIView):
+    """
+    Класс для закрытия и открытия продавцами магазина
+    """
+
+    def get(self, request):
+        """Проверка работы магазина и возможности приёма заказов"""
+        if request.user.is_authenticated:
+            if request.user.type == 'seller':
+                shop = request.user.shop
+                serializer = ShopSerializer(shop)
+                return JsonResponse({serializer.data['name']: 'Открыт' if serializer.data['opened'] else 'Закрыт'})
+            return JsonResponse({'Status': False, 'Error': 'Управление работой магазина доступно только для '
+                                                           'продавцов'}, status=403)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+    def post(self, request):
+        """Закрытие/открытие магазина"""
+        if request.user.is_authenticated:
+            if request.user.type == 'seller':
+                switch = request.data.get('shop closed/opened')
+                if switch:
+                    if switch in ['0', '1']:
+                        switch = bool(int(switch))
+                        Shop.objects.filter(user_id=request.user.id).update(opened=switch)
+                        return JsonResponse({'Status': 'Магазин открыт для приёма заказов' if switch else 'Магазин закрыт'})
+                    return JsonResponse({'Status': False, 'Error': 'Для открытия магазина и возможности приёма '
+                                                                   'заказов введите 1, для закрытия - 0'}, status=400)
+                return JsonResponse({'Status': False, 'Error': 'Данные о работе магазина не переданы'}, status=400)
+            return JsonResponse({'Status': False, 'Error': 'Управление работой магазина доступно только для '
+                                                           'продавцов'}, status=403)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
