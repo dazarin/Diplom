@@ -1,8 +1,10 @@
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.core.signals import request_started
 from django.core.validators import URLValidator
-from django.db.models import Q
+from django.db import IntegrityError
+from django.db.models import Q, Sum, F
 from django.http import JsonResponse
 from rest_framework.response import Response
 from django.shortcuts import render
@@ -11,9 +13,12 @@ from rest_framework.views import APIView
 from rest_framework.authtoken.models import Token
 from requests import get
 from yaml import load, Loader
+from ujson import loads as load_json
 
-from .models import ConfirmEmailToken, Category, Shop, ProductInfo, Product, Parameter, ProductParameter
-from .serializers import UserSerializer, CategorySerializer, ShopSerializer, ProductInfoSerializer
+from .models import ConfirmEmailToken, Category, Shop, ProductInfo, Product, Parameter, ProductParameter, Order, \
+    OrderItem, Contact
+from .serializers import UserSerializer, CategorySerializer, ShopSerializer, ProductInfoSerializer, OrderSerializer, \
+    OrderItemSerializer, ContactSerializer
 
 
 class RegisterAccount(APIView):
@@ -201,5 +206,139 @@ class OpenCloseShop(APIView):
                 return JsonResponse({'Status': False, 'Error': 'Данные о работе магазина не переданы'}, status=400)
             return JsonResponse({'Status': False, 'Error': 'Управление работой магазина доступно только для '
                                                            'продавцов'}, status=403)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+
+class BasketView(APIView):
+    """Класс для работы с корзиной (добавление/удаление товаров, просмотр корзины и редактирование"""
+
+    def get(self, request):
+        """Просмотр корзины"""
+        if request.user.is_authenticated:
+            basket = Order.objects.filter(user_id=request.user.id, status='basket').prefetch_related(
+                'ordered_items__product_info__product__category',
+                'ordered_items__product_info__product_parameters__parameter').annotate(
+                total_sum=Sum(F('ordered_items__quantity') * F('ordered_items__product_info__price'))).distinct()
+            serializer = OrderSerializer(basket, many=True)
+            return Response(serializer.data)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+    def post(self, request, *args, **kwargs):
+        """Добавление товаров в корзину"""
+        if request.user.is_authenticated:
+            items_string = request.data.get('items')
+            if items_string:
+                try:
+                    items_dict = load_json(items_string)
+                except ValueError:
+                    return JsonResponse({'Status': False, 'Error': 'Неверный формат запроса. Передайте список с '
+                                                                   'данными о товарах и их количестве'}, status=400)
+                else:
+                    basket, _ = Order.objects.get_or_create(user_id=request.user.id, status='basket')
+                    positions = 0
+                    for item in items_dict:
+                        item.update({'order': basket.id})
+                        serializer = OrderItemSerializer(data=item)
+                        if serializer.is_valid():
+                            try:
+                                serializer.save()
+                            except IntegrityError as err:
+                                return JsonResponse({'Status': False, 'Errors': str(err)})
+                            else:
+                                positions += 1
+                        else:
+                            return JsonResponse({'Status': False, 'Errors': serializer.errors})
+                    return JsonResponse({'Status': True, 'В корзину добавлено позиций': positions})
+            return JsonResponse({'Status': False, 'Error': 'Информация о товарах для добавления в корзину '
+                                                           'не передана'}, status=403)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+    def patch(self, request, *args, **kwargs):
+        """Обновление количества товаров в корзине"""
+        if request.user.is_authenticated:
+            items_string = request.data.get('items')
+            if items_string:
+                try:
+                    items_dict = load_json(items_string)
+                except ValueError:
+                    return JsonResponse({'Status': False, 'Error': 'Неверный формат запроса. Передайте список с '
+                                                                   'данными о товарах и их количестве'}, status=400)
+                else:
+                    basket = Order.objects.get(user_id=request.user.id, status='basket')
+                    positions = 0
+                    for item in items_dict:
+                        OrderItem.objects.filter(order_id=basket.id, id=item['id']).update(quantity=item['quantity'])
+                        positions += 1
+                    return JsonResponse({'Status': True, 'Обновлено количество товара по числу позиций': positions})
+            return JsonResponse({'Status': False, 'Error': 'Информация о товарах для уточнения количества '
+                                                           'не передана'}, status=403)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+    def delete(self, request, *args, **kwargs):
+        """Удаление товаров в корзине"""
+        if request.user.is_authenticated:
+            item = request.data.get('item')
+            if item.isdigit():
+                basket = Order.objects.get(user_id=request.user.id, status='basket')
+                OrderItem.objects.get(order_id=basket.id, id=item).delete()
+                return JsonResponse({'Status': 'Товар удалён'})
+            return JsonResponse({'Status': False, 'Error': 'Для удаления товара передайте его id'}, status=403)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+class ContactView(APIView):
+    """Класс для управления контактами для доставки"""
+
+    def get(self, request):
+        '''Получение контактов (адресов доставки)'''
+        if request.user.is_authenticated:
+            contacts = Contact.objects.filter(user_id=request.user.id)
+            serializer = ContactSerializer(contacts, many=True)
+            return Response(serializer.data)
+
+    def post(self, request):
+        '''Добавление нового адреса доставки'''
+        if request.user.is_authenticated:
+            if {'region', 'city', 'street', 'house'}.issubset(request.data):
+                request.data._mutable = True
+                request.data['user'] = request.user.id
+                serializer = ContactSerializer(data=request.data)
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response(serializer.data)
+                else:
+                    return JsonResponse({'Status': False, 'Errors': serializer.errors})
+            return JsonResponse({'Status': False, 'Error': 'Не переданы обязательные элементы адреса'}, status=400)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+    def patch(self, request):
+        '''Уточнение адреса доставки (редактирование комментария, исправление ошибок'''
+        if request.user.is_authenticated:
+            if request.data['contact_id'].isdigit():
+                contact = Contact.objects.filter(user_id=request.user.id, id=request.data['contact_id']).first()
+                if contact:
+                    serializer = ContactSerializer(contact, data=request.data, partial=True)
+                    if serializer.is_valid():
+                        serializer.save()
+                        return JsonResponse({'Status: Контакт обновлён': serializer.data})
+                    else:
+                        return JsonResponse({'Status': False, 'Errors': serializer.errors})
+                return JsonResponse({'Status': False, 'Error': 'Контакт не найден'}, status=404)
+            return JsonResponse({'Status': False, 'Error': 'Неверный формат запроса. Не передан id контакта'},
+                                status=400)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+    def delete(self, request, *args, **kwargs):
+        """Удаление контакта"""
+        if request.user.is_authenticated:
+            contact_id = request.data.get('contact_id')
+            Contact.objects.filter(user_id=request.user.id, id=contact_id).delete()
+            return JsonResponse({'Status': 'Контакт удалён'})
         return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
                             status=401)

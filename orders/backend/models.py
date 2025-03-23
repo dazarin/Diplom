@@ -201,7 +201,8 @@ class ProductParameter(models.Model):
 class Order(models.Model):
     objects = models.manager.Manager()
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders', verbose_name='Покупатель')
-    address = models.ForeignKey(Contact, on_delete=models.CASCADE, related_name='orders', verbose_name='Адрес')
+    address = models.ForeignKey(Contact, on_delete=models.CASCADE, related_name='orders', verbose_name='Адрес',
+                                blank=True, null=True)
     dt = models.DateTimeField(auto_now_add=True)
     status = models.CharField(choices=STATUS_CHOICES, max_length=15, verbose_name='Статус заказа')
 
