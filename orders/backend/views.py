@@ -19,6 +19,7 @@ from .models import ConfirmEmailToken, Category, Shop, ProductInfo, Product, Par
     OrderItem, Contact
 from .serializers import UserSerializer, CategorySerializer, ShopSerializer, ProductInfoSerializer, OrderSerializer, \
     OrderItemSerializer, ContactSerializer
+from .signals import new_order
 
 
 class RegisterAccount(APIView):
@@ -340,5 +341,49 @@ class ContactView(APIView):
             contact_id = request.data.get('contact_id')
             Contact.objects.filter(user_id=request.user.id, id=contact_id).delete()
             return JsonResponse({'Status': 'Контакт удалён'})
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+class OrderView(APIView):
+    '''
+    Класс для оформления и просмотра своих заказов
+    '''
+
+    def get(self, request):
+        if request.user.is_authenticated:
+            order = Order.objects.filter(user_id=request.user.id).exclude(status='basket').select_related(
+                'address').prefetch_related('ordered_items__product_info__product_parameters__parameter').annotate(
+                total_sum=Sum(F('ordered_items__quantity') * F('ordered_items__product_info__price'))).distinct()
+            serializer = OrderSerializer(order, many=True)
+            return Response(serializer.data)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+    def post(self, request):
+        if request.user.is_authenticated:
+            if 'contact_id' in request.data:
+                Order.objects.filter(user_id=request.user.id, status='basket').update(
+                    address_id=request.data['contact_id'], status='new')
+                order = Order.objects.filter(user_id=request.user.id, status='new').first()
+                new_order.send(sender=self.__class__, order=order)
+                return JsonResponse({'Status': 'Заказ принят'})
+            return JsonResponse({'Status': False, 'Error': 'Неверный формат запроса. Не передана информация об '
+                                                           'адресе для доставки'}, status=400)
+        return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
+                            status=401)
+
+
+class SellerOrdersView(APIView):
+    ''' Класс для получения заказов продавцами'''
+
+    def get(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            if request.user.type == 'seller':
+                orders = Order.objects.filter(ordered_items__product_info__shop__user_id=request.user.id).exclude(
+                    status='basket').select_related('address').prefetch_related('ordered_items__product_info').annotate(
+                    total_sum=Sum(F('ordered_items__quantity') * F('ordered_items__product_info__price'))).distinct()
+                serializer = OrderSerializer(orders, many=True)
+                return Response(serializer.data)
+            return JsonResponse({'Status': False, 'Error': 'Получение заказов доступно для продавцов'}, status=403)
         return JsonResponse({'Status': False, 'Error': 'Не пройдена аутентификация. Пожалуйста, представьтесь'},
                             status=401)
